@@ -1,236 +1,118 @@
-import face_recognition
-import cv2
-from multiprocessing import Process, Manager, cpu_count, set_start_method
-import time
-import numpy
-import threading
-import platform
-
 import argparse
-import utils
+import cv2
+import face_recognition
+import pins
+import os
+import time
+import numpy as np
+import logging
 
 
-# This is a little bit complicated (but fast) example of running face recognition on live video from your webcam.
-# This example is using multiprocess.
-
-# PLEASE NOTE: This example requires OpenCV (the `cv2` library) to be installed only to read from your webcam.
-# OpenCV is *not* required to use the face_recognition library. It's only required if you want to run this
-# specific demo. If you have trouble installing it, try any of the other demos that don't require it instead.
-
-
-# Get next worker's id
-def next_id(current_id, worker_num):
-    if current_id == worker_num:
-        return 1
-    else:
-        return current_id + 1
+class Image:
+    """ Represents processed image by face_recognition module. """
+    def __init__(self, name, path):
+        self.name = name
+        self.raw_binary = face_recognition.load_image_file(path)
+        self.encoded_binary = face_recognition.face_encodings(self.raw_binary)[0]
 
 
-# Get previous worker's id
-def prev_id(current_id, worker_num):
-    if current_id == 1:
-        return worker_num
-    else:
-        return current_id - 1
+class Webcam:
+    """ Represents video camera. """
+    def __init__(self, video_num):
+        self.handle = cv2.VideoCapture(video_num)
 
-
-# A subprocess use to capture frames.
-def capture(read_frame_list, Global, worker_num):
-    # Get a reference to webcam #0 (the default one)
-    video_capture = cv2.VideoCapture(0)
-    # video_capture.set(3, 640)  # Width of the frames in the video stream.
-    # video_capture.set(4, 480)  # Height of the frames in the video stream.
-    # video_capture.set(5, 30) # Frame rate.
-    print("Width: %d, Height: %d, FPS: %d" % (video_capture.get(3), video_capture.get(4), video_capture.get(5)))
-
-    while not Global.is_exit:
-        # If it's time to read a frame
-        if Global.buff_num != next_id(Global.read_num, worker_num):
-            # Grab a single frame of video
-            ret, frame = video_capture.read()
-            read_frame_list[Global.buff_num] = frame
-            Global.buff_num = next_id(Global.buff_num, worker_num)
+    def capture_frame(self):
+        """ Returns frame in RGB color scheme or None. """
+        ret, frame = self.handle.read()
+        if ret:
+            # OpenCV uses BGR color scheme, so we need to convert.
+            rgb_frame = frame[:, :, ::-1]
+            return rgb_frame
         else:
-            time.sleep(0.01)
-
-    # Release webcam
-    video_capture.release()
+            return None
 
 
-# Many subprocess use to process frames.
-def process(worker_id, read_frame_list, write_frame_list, Global, worker_num):
-    known_face_encodings = Global.known_face_encodings
-    known_face_names = Global.known_face_names
-    while not Global.is_exit:
+def scan_picture(rgb_frame):
+    """ Locates faces, encodes them, and returns. """
+    face_locations = face_recognition.face_locations(rgb_frame)
+    face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+    return face_encodings
 
-        utils.block(Global.lockfile)  # Stop execution if door is open.
 
-        # Wait to read
-        while Global.read_num != worker_id or Global.read_num != prev_id(Global.buff_num, worker_num):
-            # If the user has requested to end the app, then stop waiting for webcam frames
-            if Global.is_exit:
-                break
+def match_faces(authorized_images, face_encodings):
+    """ Compares face_encodings with encodings from authorized_images. """
+    known_face_encodings = [image.encoded_binary for image in authorized_images]
+    for face_encoding in face_encodings:
+        matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+        if True in matches:
+            return authorized_images[matches.index(True)]
+    return None  # No match.
 
-            time.sleep(0.01)
 
-        # Delay to make the video look smoother
-        time.sleep(Global.frame_delay)
+def configure_global_logger():
+    """ Configures global logger. """
+    logger_format = ('%(asctime)s - %(threadName)s - %(funcName)s '
+                     '- %(levelname)s - %(message)s')
+    logging.basicConfig(
+        format=logger_format,
+        level=logging.INFO)
 
-        # Read a single frame from frame list
-        frame_process = read_frame_list[worker_id]
 
-        # Expect next worker to read frame
-        Global.read_num = next_id(Global.read_num, worker_num)
+def parse_arguments():
+    """ Parses command line arguments. """
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--button-file', type=str, default='.button')
+    parser.add_argument('--video-num', type=int, default=0)
+    parser.add_argument('--capture-delay', type=float, default=1.0)
+    return parser.parse_args()
 
-        # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
-        rgb_frame = frame_process[:, :, ::-1]
 
-        # Find all the faces and face encodings in the frame of video, cost most time
-        face_locations = face_recognition.face_locations(rgb_frame)
-        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+def main():
+    options = parse_arguments()
 
-        # Loop through each face in this frame of video
-        for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-            # See if the face is a match for the known face(s)
-            matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+    configure_global_logger()
 
-            name = "Unknown"
+    logging.info('Init webcam.')
+    webcam = Webcam(options.video_num)
 
-            # If a match was found in known_face_encodings, just use the first one.
-            if True in matches:
-                first_match_index = matches.index(True)
-                name = known_face_names[first_match_index]
-                utils.touch(Global.lockfile)  # Open the door.
-                print(f'Door opened by {name}!')
+    button_file = os.path.abspath(options.button_file)
+    logging.info(f'Button file: {button_file}')
 
-            # Draw a box around the face
-            cv2.rectangle(frame_process, (left, top), (right, bottom), (0, 0, 255), 2)
+    logging.info('Register button.')
+    pins.register_button(button_file)
+        
+    # If you would like to add an authorized user,
+    # create Image instance and add it to authorized_images list.
+    
+    logging.info('Read images.')
+    authorized = Image(name='Kamil Janiec', path='./images/janiec.jpg')
+    authorized_images = [
+        authorized
+    ]
 
-            # Draw a label with a name below the face
-            cv2.rectangle(frame_process, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
-            font = cv2.FONT_HERSHEY_DUPLEX
-            cv2.putText(frame_process, name, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
+    while True:
+        if os.path.exists(button_file):
+            logging.info('Taking a picture.')
+            rgb_frame = webcam.capture_frame()
 
-        # Wait to write
-        while Global.write_num != worker_id:
-            time.sleep(0.01)
+            logging.info('Scanning a picture.')
+            face_encodings = scan_picture(rgb_frame)
 
-        # Send frame to global
-        write_frame_list[worker_id] = frame_process
+            logging.info(f'Found #{len(face_encodings)} faces.')
 
-        # Expect next worker to write frame
-        Global.write_num = next_id(Global.write_num, worker_num)
+            if face_encodings:
+                logging.info('Comparing with database.')
+                matched = match_faces(authorized_images, face_encodings)
+
+                if matched:
+                    logging.info(f'Match found: {matched.name}')
+                    pins.open_the_door(interval=4)
+                else:
+                    logging.info(f'Unknown user.')
+                    turn_red_led(interval=1)
+        logging.info('Button is not pressed.')
+        time.sleep(options.capture_delay)
 
 
 if __name__ == '__main__':
-
-    # Fix Bug on MacOS
-    if platform.system() == 'Darwin':
-        set_start_method('forkserver')
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('index', type=str)
-    parser.add_argument('--lockfile', type=str, default='.door_file')
-    options = parser.parse_args()
-
-    # Global variables
-    Global = Manager().Namespace()
-    Global.buff_num = 1
-    Global.read_num = 1
-    Global.write_num = 1
-    Global.frame_delay = 0
-    Global.is_exit = False
-    read_frame_list = Manager().dict()
-    write_frame_list = Manager().dict()
-
-    Global.index = options.index
-    Global.lockfile = options.lockfile
-
-    # Number of workers (subprocess use to process frames)
-    if cpu_count() > 2:
-        worker_num = cpu_count() - 1  # 1 for capturing frames
-    else:
-        worker_num = 2
-
-    # Subprocess list
-    p = []
-
-    # Create a thread to capture frames (if uses subprocess, it will crash on Mac)
-    p.append(threading.Thread(target=capture, args=(read_frame_list, Global, worker_num,)))
-    p[0].start()
-
-    # Load a sample picture and learn how to recognize it.
-    #obama_image = face_recognition.load_image_file("./images/janiec.jpg")
-    #obama_face_encoding = face_recognition.face_encodings(obama_image)[0]
-
-    # Create arrays of known face encodings and their names
-    #Global.known_face_encodings = [
-    #    obama_face_encoding,
-    #]
-    #Global.known_face_names = [
-    #    "Barack Obama",
-    #]
-
-    names, images = utils.read_index(Global.index)
-
-    encoded_images = []
-    
-    for image_path in images:
-        image = face_recognition.load_image_file(image_path)
-        image_encoding = face_recognition.face_encodings(image)[0]
-        encoded_images.append(image_encoding)
-
-    Global.known_face_names = names
-    Global.known_face_encodings = encoded_images
-
-    print(Global.known_face_names)
-    print(Global.known_face_encodings)
-
-    # Create workers
-    for worker_id in range(1, worker_num + 1):
-        p.append(Process(target=process, args=(worker_id, read_frame_list, write_frame_list, Global, worker_num,)))
-        p[worker_id].start()
-
-    # Start to show video
-    last_num = 1
-    fps_list = []
-    tmp_time = time.time()
-    while not Global.is_exit:
-        while Global.write_num != last_num:
-            last_num = int(Global.write_num)
-
-            # Calculate fps
-            delay = time.time() - tmp_time
-            tmp_time = time.time()
-            fps_list.append(delay)
-            if len(fps_list) > 5 * worker_num:
-                fps_list.pop(0)
-            fps = len(fps_list) / numpy.sum(fps_list)
-            print("fps: %.2f" % fps)
-
-            # Calculate frame delay, in order to make the video look smoother.
-            # When fps is higher, should use a smaller ratio, or fps will be limited in a lower value.
-            # Larger ratio can make the video look smoother, but fps will hard to become higher.
-            # Smaller ratio can make fps higher, but the video looks not too smoother.
-            # The ratios below are tested many times.
-            if fps < 6:
-                Global.frame_delay = (1 / fps) * 0.75
-            elif fps < 20:
-                Global.frame_delay = (1 / fps) * 0.5
-            elif fps < 30:
-                Global.frame_delay = (1 / fps) * 0.25
-            else:
-                Global.frame_delay = 0
-
-            # Display the resulting image
-            cv2.imshow('Video', write_frame_list[prev_id(Global.write_num, worker_num)])
-
-        # Hit 'q' on the keyboard to quit!
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            Global.is_exit = True
-            break
-
-        time.sleep(0.01)
-
-    # Quit
-    cv2.destroyAllWindows()
+    main()

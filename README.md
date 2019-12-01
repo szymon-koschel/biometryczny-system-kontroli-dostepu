@@ -3,23 +3,13 @@ web intercom
 
 ## how to spawn?
 uasge: `zsw.py [-h] [--lockfile LOCKFILE] index`
+usage: `zsw.py [-h] [--button-file BUTTON_FILE] [--video-num VIDEO_NUM] [--capture-delay CAPTURE_DELAY] 
 
-### what's the index?
-index is a csv file with authorized users names and their faces, e.g.:
-```
-Kamil Janiec,./images/janiec.jpg
-John Doe,./image/doe.jpg
-```
+### how does it work?
+When button is pushed (and `button_file` is created):
+1. App is capturing photos via webcam under `video_num` with delay specified as `capture_delay`.
+2. App is triggering relay if someone is recognized.
 
-## how does it work?
-An app opens a door when some authorized user is recognized in the webcam.
 
-### internals
-1. App is looking via webcam.
-2. App is creating `lockfile` if someone is recognized.
-3. App blocks its execution while `lockfile` exist.
-4. App resumes its execution when `lockfile` is removed.
-
-As a conclusion:
-- `lockfile` exists == door is open.
-- `lockfile` doesn't exist == door is locked.
+### how to add authorized users?
+Add Image instance to authorized_images in `zsw.py`.
