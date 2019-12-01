@@ -2,8 +2,7 @@
 web intercom
 
 ## how to spawn?
-uasge: `zsw.py [-h] [--lockfile LOCKFILE] index`
-usage: `zsw.py [-h] [--button-file BUTTON_FILE] [--video-num VIDEO_NUM] [--capture-delay CAPTURE_DELAY] 
+usage: `zsw.py [-h] [--button-file BUTTON_FILE] [--video-num VIDEO_NUM] [--capture-delay CAPTURE_DELAY]`
 
 ### how does it work?
 When button is pushed (and `button_file` is created):
