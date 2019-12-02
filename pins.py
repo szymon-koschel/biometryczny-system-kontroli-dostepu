@@ -7,7 +7,7 @@ import logging
 
 button = gpiozero.Button(2)
 led_green = gpiozero.LED(21)
-led_red = gpiozero.LED(3)
+led_red = gpiozero.LED(10)
 relay = gpiozero.LED(13)
 
 
