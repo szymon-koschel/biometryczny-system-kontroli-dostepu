@@ -5,9 +5,9 @@ import logging
 
 # NOTE: These values are hard-coded.
 
-button = gpiozero.Button(2)
+button = gpiozero.Button(10)
 led_green = gpiozero.LED(21)
-led_red = gpiozero.LED(10)
+led_red = gpiozero.LED(3)
 relay = gpiozero.LED(13)
 
 
